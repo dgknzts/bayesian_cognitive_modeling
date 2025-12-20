@@ -1,0 +1,19 @@
+# R
+.Rproj.user/
+.Rhistory
+.RData
+.Ruserdata
+
+# PDF textbook (copyrighted)
+*.pdf
+
+# Original example code from textbook
+exampleCode/
+
+# Claude Code
+.claude/
+CLAUDE.md
+
+# R Markdown outputs
+*.html
+*_files/
