@@ -1,0 +1,94 @@
+---
+title: "Inferences with Gaussians"
+output: inferences_with_gaussians
+---
+
+```{r setup, message=FALSE}
+library(rjags)
+library(coda)
+library(ggplot2)
+library(patchwork)
+library(lattice)
+
+knitr::opts_chunk$set(fig.width = 5, fig.height = 3)
+```
+
+# 4.1 Inferring a mean and standard deviation
+
+```{r parameters-4.1}
+# ======================
+# CHANGE THESE TO RERUN
+# ======================
+x <- c(1.1, 1.9, 2.3, 1.8)  # observed data
+n <- length(x)
+n_iter <- 10000
+```
+
+```{r model-4.1}
+model_string <- "
+model {
+  # Likelihood: each observation comes from normal with mean mu and precision lambda
+  for (i in 1:n) {
+    x[i] ~ dnorm(mu, lambda)
+  }
+
+  # Prior on mean: vague normal
+  mu ~ dnorm(0, 0.001)
+
+  # Prior on precision: vague gamma
+  # lambda = 1/sigma^2 (JAGS uses precision, not variance!)
+  lambda ~ dgamma(0.001, 0.001)
+
+  # Transform to get standard deviation
+  sigma <- 1/sqrt(lambda)
+}
+"
+
+model <- jags.model(
+  textConnection(model_string),
+  data = list(x = x, n = n),
+  n.chains = 4,
+  quiet = TRUE
+)
+
+update(model, 1000)  # burn-in
+
+samples <- coda.samples(
+  model,
+  variable.names = c("mu", "sigma"),
+  n.iter = n_iter
+)
+
+samples_df <- as.data.frame(as.matrix(samples))
+```
+
+```{r diagnostics-4.1}
+plot(samples)
+```
+
+```{r posterior-4.1, fig.width=6, fig.height=3}
+p1 <- ggplot(samples_df, aes(x = mu)) +
+  geom_histogram(aes(y = after_stat(density)), bins = 50,
+                 fill = "steelblue", color = "white") +
+  geom_vline(xintercept = mean(x), color = "red", linetype = "dashed") +
+  labs(title = "Posterior of μ", subtitle = "Red = sample mean", x = "μ", y = "Density") +
+  theme_minimal()
+
+p2 <- ggplot(samples_df, aes(x = sigma)) +
+  geom_histogram(aes(y = after_stat(density)), bins = 50,
+                 fill = "steelblue", color = "white") +
+  geom_vline(xintercept = sd(x), color = "red", linetype = "dashed") +
+  labs(title = "Posterior of σ", subtitle = "Red = sample SD", x = "σ", y = "Density") +
+  theme_minimal()
+
+p1 | p2
+```
+
+```{r joint-4.1, fig.width=5, fig.height=4}
+ggplot(samples_df, aes(x = mu, y = sigma)) +
+  geom_point(alpha = 0.1, size = 0.5) +
+  labs(title = "Joint posterior", x = "μ", y = "σ") +
+  theme_minimal()
+```
+
+**Key point**: JAGS uses **precision** (λ = 1/σ²) not variance for normal distributions. We transform back to σ for interpretability.
