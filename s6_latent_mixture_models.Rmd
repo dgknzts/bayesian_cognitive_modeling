@@ -1,0 +1,269 @@
+---
+title: "Chapter 6: Latent Mixture Models"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+```{r}
+library(rjags)
+library(coda)
+library(ggplot2)
+library(tidyverse)
+library(patchwork)
+```
+
+------------------------------------------------------------------------
+
+# 6.1 Exam Scores
+
+![](images/clipboard-2722536644.png)
+
+**Data**: 15 students took a 40-question exam. Their scores:
+
+```{r}
+# Exam scores (number correct out of 40)
+k <- c(21, 17, 21, 18, 22, 31, 31, 34, 34, 35, 35, 36, 39, 36, 35, 28)
+p <- length(k)  # number of people
+n <- 40         # number of questions
+
+# Visualize the scores
+data.frame(student = 1:p, score = k) %>%
+  ggplot(aes(x = score)) +
+  geom_histogram(binwidth = 2, fill = "steelblue", alpha = 0.7, color = "white") +
+  geom_vline(xintercept = n * 0.5, linetype = "dashed", color = "red") +
+  annotate("text", x = 20, y = 3.5, label = "Chance level (50%)", color = "red") +
+  theme_minimal() +
+  labs(x = "Score (out of 40)", y = "Count",
+       title = "Distribution of Exam Scores",
+       subtitle = "Notice the two clusters: guessers (~20) vs knowers (~35)")
+```
+
+```{r}
+model_string <- "
+model {
+  # Likelihood
+  for (i in 1:p) {
+    beta[i] <- equals(z[i], 0) * psi + equals(z[i], 1) * phi
+    
+    k[i] ~ dbin(beta[i], n)
+  }
+  
+  # Priors
+  for (i in 1:p) {
+    z[i] ~ dbern(0.5)
+  }
+  
+  psi <- 0.5
+  phi ~ dunif(0.5, 1) # We can also dbeta(1,1)I(0.5, 1) --> I() works like domain
+}
+"
+```
+
+```{r}
+# Run JAGS
+model <- jags.model(
+  textConnection(model_string),
+  data = list(p = p, k = k, n = n),
+  inits = list(z = rep(1, p)),  # Initialize all as knowers
+  n.chains = 4,
+  quiet = TRUE
+)
+
+update(model, 1000)  # Burn-in
+
+samples <- coda.samples(
+  model,
+  variable.names = c("phi", "z"),
+  n.iter = 10000
+)
+```
+
+```{r}
+#summary(samples)
+```
+
+```{r, fig.width = 7, fig.height = 4}
+posterior_df <- as.data.frame(as.matrix(samples))
+
+# Phi: knower's ability
+p1 <- ggplot(posterior_df, aes(x = phi)) +
+  geom_density(fill = "steelblue", alpha = 0.5) +
+  theme_minimal() +
+  labs(x = "φ (knower's ability)", y = "Density",
+       title = "Posterior: Knower's Success Rate")
+
+# Z indicators: probability each student is a knower
+z_cols <- grep("^z\\[", names(posterior_df), value = TRUE)
+z_means <- colMeans(posterior_df[, z_cols])
+
+p2 <- data.frame(
+  student = 1:p,
+  score = k,
+  p_knower = z_means
+) %>%
+  ggplot(aes(x = factor(student), y = p_knower, fill = score)) +
+  geom_col() +
+  scale_fill_gradient(low = "coral", high = "seagreen") +
+  geom_hline(yintercept = 0.5, linetype = "dashed") +
+  theme_minimal() +
+  labs(x = "Student", y = "P(Knower)", fill = "Score",
+       title = "Posterior Probability of Being a Knower")
+
+p1 + p2
+```
+
+```{r}
+# Summary table
+# data.frame(
+#   Student = 1:p,
+#   Score = k,
+#   P_Knower = round(z_means, 3),
+#   Classification = ifelse(z_means > 0.5, "Knower", "Guesser")
+# ) %>%
+#   knitr::kable()
+```
+
+# 6.2 Exam scores with individual differences
+
+![](images/clipboard-3789706398.png)
+
+**Extension**: Instead of all knowers sharing one ability φ, each knower has their **own ability φ[i]** drawn from a group-level distribution.
+
+**Hierarchical structure**: - Guessers: ψ = 0.5 (fixed) - Knowers: φ[i] \~ Normal(μ, σ) truncated to [0, 1] - μ = mean ability of knowers (\> 0.5) - σ = individual variation among knowers
+
+```{r}
+# Same data as 6.1
+k <- c(21, 17, 21, 18, 22, 31, 31, 34, 34, 35, 35, 36, 39, 36, 35, 28)
+p <- length(k)
+n <- 40
+```
+
+```{r}
+model_string <- "
+model {
+  # Likelihood
+  for (i in 1:p) {
+    beta[i] <- equals(z[i], 0) * psi + equals(z[i], 1) * phi[i]
+    
+    k[i] ~ dbin(beta[i], n)
+  }
+
+  # Priors
+  mu ~ dunif(0.5, 1)
+  lambda ~ dgamma(0.001, 0.001)
+  
+  psi <- 0.5
+  
+  for (i in 1:p) {
+    z[i] ~ dbern(0.5)
+  }
+  for (i in 1:p) {
+    phi[i] ~ dnorm(mu, lambda)T(0, 1) # new syntax is T(a,b) for truncation
+  }
+  
+  # More output from the book
+  sigma <- 1/sqrt(lambda) # Convert precision to SD
+  
+  predphi ~ dnorm(mu, lambda)T(0, 1) # Posterior predictive for new knower
+}
+"
+```
+
+```{r}
+model <- jags.model(
+  textConnection(model_string),
+  data = list(p = p, k = k, n = n),
+  inits = list(z = rep(1, p), mu = 0.75, lambda = 1),
+  n.chains = 4,
+  quiet = TRUE
+)
+
+update(model, 1000)
+
+samples <- coda.samples(
+  model,
+  variable.names = c("mu", "sigma", "phi", "z", "predphi"),
+  n.iter = 10000
+)
+```
+
+```{r}
+#summary(samples)
+```
+
+```{r, fig.width = 8, fig.height = 8}
+posterior_df <- as.data.frame(as.matrix(samples))
+
+# Extract z and phi estimates
+z_cols <- grep("^z\\[", names(posterior_df), value = TRUE)
+z_means <- colMeans(posterior_df[, z_cols])
+
+phi_cols <- grep("^phi\\[", names(posterior_df), value = TRUE)
+phi_means <- colMeans(posterior_df[, phi_cols])
+phi_lower <- apply(posterior_df[, phi_cols], 2, quantile, 0.025)
+phi_upper <- apply(posterior_df[, phi_cols], 2, quantile, 0.975)
+
+# P(Knower) for each student - THE KEY PLOT
+p1 <- data.frame(
+  Student = 1:p,
+  Score = k,
+  P_Knower = z_means
+) %>%
+  ggplot(aes(x = factor(Student), y = P_Knower, fill = Score)) +
+  geom_col() +
+  geom_hline(yintercept = 0.5, linetype = "dashed", color = "black") +
+  scale_fill_gradient(low = "coral", high = "seagreen") +
+  theme_minimal() +
+  labs(x = "Student", y = "P(Knower)", fill = "Score",
+       title = "Group Assignment: P(z = 1)",
+       subtitle = "Students 1-5 are guessers, 6-16 are knowers")
+
+# Mu: group mean for knowers
+p2 <- ggplot(posterior_df, aes(x = mu)) +
+  geom_density(fill = "steelblue", alpha = 0.5) +
+  theme_minimal() +
+  labs(x = "μ (mean knower ability)", y = "Density",
+       title = "Group Mean for Knowers")
+
+# Sigma: individual differences SD
+p3 <- ggplot(posterior_df, aes(x = sigma)) +
+  geom_density(fill = "coral", alpha = 0.5) +
+  theme_minimal() +
+  labs(x = "σ (SD of knower abilities)", y = "Density",
+       title = "Individual Differences (σ)")
+
+# Posterior predictive for new knower
+p4 <- ggplot(posterior_df, aes(x = predphi)) +
+  geom_density(fill = "seagreen", alpha = 0.5) +
+  geom_vline(xintercept = 0.5, linetype = "dashed", color = "red") +
+  theme_minimal() +
+  labs(x = "φ (predicted ability)", y = "Density",
+       title = "Posterior Predictive: New Knower")
+
+# Individual phi estimates - ONLY FOR KNOWERS (z > 0.5)
+p5 <- data.frame(
+  Student = 1:p,
+  Score = k,
+  phi = phi_means,
+  lower = phi_lower,
+  upper = phi_upper,
+  P_Knower = z_means,
+  Group = ifelse(z_means > 0.5, "Knower", "Guesser")
+) %>%
+  ggplot(aes(x = factor(Student), y = phi, color = Group)) +
+  geom_point(size = 3) +
+  geom_errorbar(aes(ymin = lower, ymax = upper), width = 0.2) +
+  geom_hline(yintercept = 0.5, linetype = "dashed", color = "red") +
+  scale_color_manual(values = c("Guesser" = "coral", "Knower" = "seagreen")) +
+  theme_minimal() +
+  labs(x = "Student", y = "φ[i]", color = "",
+       title = "Individual φ[i] Estimates",
+       subtitle = "Note: φ[i] for guessers is meaningless (not used in likelihood)")
+
+p1 / (p2 + p3) / (p4 + p5)
+```
+
+"For the first 15 participants the results are essentially unchanged. The new participant with a score of 28 is now inferred to be in the knowledge group with probability 0.8, compared to the original 0.5. This happens because the new participant is more likely to be a low-knowledge member of the knowledge group than a member of the guessing group. The fact that the current model allows for individual differences helps it account for the relatively low score of 28."
