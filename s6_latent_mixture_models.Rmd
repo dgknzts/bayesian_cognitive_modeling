@@ -267,3 +267,228 @@ p1 / (p2 + p3) / (p4 + p5)
 ```
 
 "For the first 15 participants the results are essentially unchanged. The new participant with a score of 28 is now inferred to be in the knowledge group with probability 0.8, compared to the original 0.5. This happens because the new participant is more likely to be a low-knowledge member of the knowledge group than a member of the guessing group. The fact that the current model allows for individual differences helps it account for the relatively low score of 28."
+
+# 6.3 Twenty questions
+
+![](images/clipboard-1616131598.png)
+
+**The problem**: 10 people answer 20 true/false questions. Can we estimate both: - **p[i]** — each person's ability - **q[j]** — each question's easiness
+
+**Key insight**: The probability of person i answering question j correctly is: $$\theta_{i,j} = p_i \times q_j$$
+
+This is a **multiplicative model** — a high-ability person on an easy question has high θ, but even good people can miss hard questions (low q).
+
+```{r}
+# Data: 10 people × 20 questions (1 = correct, 0 = incorrect)
+k <- c(1,1,1,1,0,0,1,1,0,1,0,0,1,0,0,1,0,1,0,0,
+        0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+        0,0,1,0,0,0,1,1,0,0,0,0,1,0,0,0,0,0,0,0,
+        0,0,0,0,0,0,1,0,1,1,0,0,0,0,0,0,0,0,0,0,
+        1,0,1,1,0,1,1,1,0,1,0,0,1,0,0,0,0,1,0,0,
+        1,1,0,1,0,0,0,1,0,1,0,1,1,0,0,1,0,1,0,0,
+        0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,
+        0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+        0,1,1,0,0,0,0,1,0,1,0,0,1,0,0,0,0,1,0,1,
+        1,0,0,0,0,0,1,0,0,1,0,0,1,0,0,0,0,0,0,0)
+
+k <- matrix(k, nrow = 10, byrow = TRUE)
+
+np <- nrow(k)  # 10 people
+nq <- ncol(k)  # 20 questions
+```
+
+```{r, fig.width = 4, fig.height = 3}
+# Visualize the response matrix
+k_df <- as.data.frame(k)
+colnames(k_df) <- paste0("Q", 1:nq)
+k_df$Person <- factor(1:np)
+
+k_long <- k_df %>%
+  pivot_longer(cols = starts_with("Q"), names_to = "Question", values_to = "Correct") %>%
+  mutate(Question = factor(Question, levels = paste0("Q", 1:nq)))
+
+ggplot(k_long, aes(x = Question, y = Person, fill = factor(Correct))) +
+  geom_tile(color = "white") +
+  scale_fill_manual(values = c("0" = "coral", "1" = "seagreen"),
+                    labels = c("Wrong", "Correct")) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(fill = "", title = "Response Matrix: 10 People × 20 Questions",
+       subtitle = "Person 8 got everything wrong; Q14-15, Q19-20 are very hard")
+```
+
+```{r}
+# Person and question totals
+cat("Person scores (out of 20):", rowSums(k), "\n")
+cat("Question correct (out of 10):", colSums(k), "\n")
+```
+
+```{r}
+model_string <- "
+model {
+  # Likelihood
+  for (i in 1:np) {
+    for (j in 1:nq) {
+      theta[i, j] <- p[i] * q[j]
+      
+      k[i, j] ~ dbern(theta[i, j])
+    }
+  }
+  
+  # Priors
+  for (i in 1:np) {
+    p[i] ~ dbeta(1, 1)
+  }
+  
+  for (j in 1:nq) {
+    q[j] ~ dbeta(1, 1)
+  }
+  
+  
+}
+"
+```
+
+```{r}
+# Find which entries are missing (NA)
+missing_idx <- which(is.na(k), arr.ind = TRUE)
+cat("Missing data locations:\n")
+for (i in 1:nrow(missing_idx)) {
+  cat(sprintf("  k[%d, %d] = Person %d, Question %d\n",
+              missing_idx[i,1], missing_idx[i,2],
+              missing_idx[i,1], missing_idx[i,2]))
+}
+```
+
+```{r}
+model <- jags.model(
+  textConnection(model_string),
+  data = list(np = np, nq = nq, k = k),
+  inits = list(p = runif(np), q = runif(nq)),
+  n.chains = 4,
+  quiet = TRUE
+)
+
+update(model, 1000)
+
+# Monitor k to get posterior predictions for missing values!
+samples <- coda.samples(
+  model,
+  variable.names = c("p", "q", "k"),
+  n.iter = 10000
+)
+```
+
+```{r, fig.width = 8, fig.height = 4}
+posterior_df <- as.data.frame(as.matrix(samples))
+
+# Extract p and q estimates
+p_cols <- grep("^p\\[", names(posterior_df), value = TRUE)
+p_means <- colMeans(posterior_df[, p_cols])
+
+q_cols <- grep("^q\\[", names(posterior_df), value = TRUE)
+q_means <- colMeans(posterior_df[, q_cols])
+
+# Simple side-by-side: Person abilities and Question easiness
+p1 <- data.frame(Person = 1:np, Ability = p_means) %>%
+  ggplot(aes(x = factor(Person), y = Ability)) +
+  geom_col(fill = "steelblue", alpha = 0.7) +
+  theme_minimal() +
+  labs(x = "Person", y = "p[i]", title = "Person Abilities")
+
+p2 <- data.frame(Question = 1:nq, Easiness = q_means) %>%
+  ggplot(aes(x = factor(Question), y = Easiness)) +
+  geom_col(fill = "coral", alpha = 0.7) +
+  theme_minimal() +
+  labs(x = "Question", y = "q[j]", title = "Question Easiness")
+
+p1 + p2
+```
+
+**Conclusions:** Person 8 has p≈0 (not listening). Q5, Q14, Q15, Q19, Q20 have q≈0 (very hard).
+
+# 6.4 The two-country quiz
+
+![](images/clipboard-277785354.png)
+
+**The problem**: 8 people answer 8 questions about two countries. Each person and question belongs to one country (latent). People do better on questions about "their" country.
+
+-   **x[i]** = person i's country (0 or 1)
+-   **z[j]** = question j's country (0 or 1)
+-   **α** = P(correct) when person & question match (same country)
+-   **β** = P(correct) when mismatch (β \< α)
+
+```{r}
+# Data: 8 people × 8 questions
+k <- c(1,0,0,1,1,0,0,1,
+       1,0,0,1,1,0,0,1,
+       0,1,1,0,0,1,0,0,
+       0,1,1,0,0,1,1,0,
+       1,0,0,1,1,0,0,1,
+       0,0,0,1,1,0,0,1,
+       0,1,0,0,0,1,1,0,
+       0,1,1,1,0,1,1,0)
+k <- matrix(k, nrow = 8, byrow = TRUE)
+
+nx <- nrow(k)  # 8 people
+nz <- ncol(k)  # 8 questions
+```
+
+```{r}
+model_string <- "
+model {
+  
+}
+"
+```
+
+```{r}
+model <- jags.model(
+  textConnection(model_string),
+  data = list(nx = nx, nz = nz, k = k),
+  inits = list(x = round(runif(nx)), z = round(runif(nz)), alpha = 0.5, beta = 0.25),
+  n.chains = 4,
+  quiet = TRUE
+)
+
+update(model, 1000)
+
+samples <- coda.samples(
+  model,
+  variable.names = c("alpha", "beta", "x", "z"),
+  n.iter = 10000
+)
+```
+
+```{r, fig.width = 8, fig.height = 4}
+posterior_df <- as.data.frame(as.matrix(samples))
+
+# Alpha and Beta posteriors
+p1 <- posterior_df %>%
+  select(alpha, beta) %>%
+  pivot_longer(everything(), names_to = "param", values_to = "value") %>%
+  ggplot(aes(x = value, fill = param)) +
+  geom_density(alpha = 0.5) +
+  theme_minimal() +
+  labs(x = "Probability", y = "Density", fill = "",
+       title = "α (match) vs β (mismatch)")
+
+# Group assignments
+x_cols <- grep("^x\\[", names(posterior_df), value = TRUE)
+z_cols <- grep("^z\\[", names(posterior_df), value = TRUE)
+x_means <- colMeans(posterior_df[, x_cols])
+z_means <- colMeans(posterior_df[, z_cols])
+
+p2 <- data.frame(
+  ID = c(1:nx, 1:nz),
+  P_country1 = c(x_means, z_means),
+  Type = c(rep("Person", nx), rep("Question", nz))
+) %>%
+  ggplot(aes(x = factor(ID), y = P_country1, fill = Type)) +
+  geom_col(position = "dodge") +
+  geom_hline(yintercept = 0.5, linetype = "dashed") +
+  theme_minimal() +
+  labs(x = "ID", y = "P(Country 1)", fill = "", title = "Group Assignments")
+
+p1 + p2
+```
