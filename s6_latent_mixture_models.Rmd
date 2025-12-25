@@ -437,7 +437,25 @@ nz <- ncol(k)  # 8 questions
 ```{r}
 model_string <- "
 model {
+  # Likelihood
+  for (i in 1:nx) {
+    for (j in 1:nz) {
+      theta[i, j] <- equals(x[i], z[j]) * alpha + (1- equals(x[i], z[j])) * beta
+      k[i, j] ~ dbern(theta[i, j])
+    }
+  }
   
+  # Priors
+  alpha ~ dunif(0, 1)
+  beta ~ dunif(0, alpha)
+  
+  for (i in 1:nx) {
+    x[i] ~ dbern(0.5)
+  }
+  
+  for (j in 1:nz) {
+    z[j] ~ dbern(0.5)
+  }
 }
 "
 ```
@@ -489,6 +507,106 @@ p2 <- data.frame(
   geom_hline(yintercept = 0.5, linetype = "dashed") +
   theme_minimal() +
   labs(x = "ID", y = "P(Country 1)", fill = "", title = "Group Assignments")
+
+p1 + p2
+```
+
+# 6.5 Assessment of malingering
+
+![](images/clipboard-1997643703.png)
+
+**The problem**: 22 people take a 45-question test. Some are honest ("bona fide"), some are faking poor performance ("malingerers"). Can we detect who is faking?
+
+-   **z[i]** = 0 (bona fide) or 1 (malingerer)
+-   **θ[i]** = individual ability, drawn from group-specific beta distribution
+-   **μ_bon** = mean for honest group (high)
+-   **μ_mal** = mean for malingerers (lower)
+-   **mudiff** = difference on logit scale (μ_mal = logit⁻¹(logit(μ_bon) - mudiff))
+
+```{r}
+# Data: scores out of 45
+k <- c(45,45,44,45,44,45,45,45,45,45,30,20,6,44,44,27,25,17,14,27,35,30)
+p <- length(k)  # 22 people
+n <- 45         # questions
+
+# Quick look at the data
+data.frame(Person = 1:p, Score = k) %>%
+  ggplot(aes(x = factor(Person), y = Score)) +
+  geom_col(fill = "steelblue", alpha = 0.7) +
+  geom_hline(yintercept = n * 0.5, linetype = "dashed", color = "red") +
+  theme_minimal() +
+  labs(x = "Person", y = "Score (out of 45)", title = "Test Scores")
+```
+
+```{r}
+model_string <- "
+model {
+  # PRIORS
+  mub ~ dbeta(1, 1)              # mean for bona fide group
+  mud ~ dnorm(0, 0.1)T(0,)       # difference (logit scale), must be positive
+  lambdab ~ dunif(40, 800)       # precision for bona fide (tight)
+  lambdam ~ dunif(4, 100)        # precision for malingerers (variable)
+  phi ~ dbeta(5, 5)              # base rate of malingerers
+
+  # TRANSFORMATION
+  logit(mum) <- logit(mub) - mud  # malingerer mean < bona fide mean
+
+  # GROUP ASSIGNMENT
+  for (i in 1:p) {
+    z[i] ~ dbern(phi)  # 0 = bona fide, 1 = malingerer
+  }
+
+  # LIKELIHOOD
+  for (i in 1:p) {
+    theta[i,1] ~ dbeta(mub*lambdab, (1-mub)*lambdab)  # ability if bona fide
+    theta[i,2] ~ dbeta(mum*lambdam, (1-mum)*lambdam)  # ability if malingerer
+    k[i] ~ dbin(theta[i, z[i]+1], n)  # z+1 converts 0/1 to index 1/2
+  }
+}
+"
+```
+
+```{r}
+model <- jags.model(
+  textConnection(model_string),
+  data = list(p = p, k = k, n = n),
+  inits = list(z = round(runif(p)), mud = 0.3),
+  n.chains = 4,
+  quiet = TRUE
+)
+
+update(model, 1000)
+
+samples <- coda.samples(
+  model,
+  variable.names = c("z", "mub", "mum", "phi"),
+  n.iter = 10000
+)
+```
+
+```{r, fig.width = 8, fig.height = 4}
+posterior_df <- as.data.frame(as.matrix(samples))
+
+# P(malingerer) for each person
+z_cols <- grep("^z\\[", names(posterior_df), value = TRUE)
+z_means <- colMeans(posterior_df[, z_cols])
+
+p1 <- data.frame(Person = 1:p, Score = k, P_mal = z_means) %>%
+  ggplot(aes(x = factor(Person), y = P_mal)) +
+  geom_col(fill = "coral", alpha = 0.7) +
+  geom_hline(yintercept = 0.5, linetype = "dashed") +
+  theme_minimal() +
+  labs(x = "Person", y = "P(Malingerer)", title = "Who is Faking?")
+
+# Group means
+p2 <- posterior_df %>%
+  select(mub, mum) %>%
+  pivot_longer(everything(), names_to = "Group", values_to = "Mean") %>%
+  mutate(Group = ifelse(Group == "mub", "Bona fide", "Malingerer")) %>%
+  ggplot(aes(x = Mean, fill = Group)) +
+  geom_density(alpha = 0.5) +
+  theme_minimal() +
+  labs(x = "μ (group mean)", y = "Density", fill = "", title = "Group Means")
 
 p1 + p2
 ```
