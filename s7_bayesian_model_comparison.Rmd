@@ -1,0 +1,97 @@
+---
+title: "Chapter 7: Bayesian Model Comparison"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+```{r}
+library(rjags)
+library(coda)
+library(ggplot2)
+library(tidyverse)
+library(patchwork)
+```
+
+------------------------------------------------------------------------
+
+From page 117: "From the current chapter, it is important that you understand the following key points:
+
+• Complex models are models that make many predictions. This may happen because they have many parameters, because they have prior parameter distributions that are relatively non-precise and spread out over a wide range, or because they have parameters that have a complicated functional form. Complex models are difficult to falsify.
+
+• The Bayes factor penalizes models for needless complexity and therefore it implements Ptolemy’s principle of parsimony (octhams razor).
+
+• The Bayes factor provides a comparative measure of evidence as it pits the predictive adequacy of one model against that of another.
+
+• The Bayes factor requires a careful selection of prior distributions, as these form an integral part of the model specification.
+
+• Extraordinary claims require extraordinary evidence."
+
+## 7.1 Marginal Likelihood (p.101)
+
+-   **What is it?**: The probability of the data given a model (averaging over all parameter values)
+-   $p(D|M) = \int p(D|\theta, M) \cdot p(\theta|M) \, d\theta$
+-   Also called: "model evidence" or "integrated likelihood"
+-   **Key insight**: Automatically balances fit vs complexity
+    -   Complex models spread prior over more parameter space → lower marginal likelihood unless data really needs complexity
+-   Hard to compute directly (requires integrating over all parameters)
+
+## 7.2 The Bayes Factor (p.104)
+
+-   **Definition**: Ratio of marginal likelihoods for two models
+-   $BF_{01} = \frac{p(D|M_0)}{p(D|M_1)}$
+-   Interpretation scale (Jeffreys):
+    -   BF = 1–3: Anecdotal evidence
+    -   BF = 3–10: Moderate evidence
+    -   BF = 10–30: Strong evidence
+    -   BF = 30–100: Very strong evidence
+    -   BF \> 100: Extreme evidence
+-   **Symmetric**: Can support either model (unlike p-values which only reject)
+-   BF₁₀ = 1/BF₀₁ (just flip the ratio)
+
+## 7.3 Posterior Model Probabilities (p.106)
+
+-   Bayes factors update **prior model odds** to **posterior model odds**
+-   $\frac{p(M_1|D)}{p(M_0|D)} = BF_{10} \times \frac{p(M_1)}{p(M_0)}$
+-   With equal priors p(M₀) = p(M₁) = 0.5:
+    -   $p(M_1|D) = \frac{BF_{10}}{1 + BF_{10}}$
+-   **Key point**: Bayes factors are evidence; posterior probabilities also depend on prior beliefs about models
+
+## 7.4 Advantages of the Bayesian Approach (p.107)
+
+-   **Can support null hypothesis**: Unlike NHST which can only reject
+-   **Continuous evidence**: Not just "significant" vs "not significant"
+-   **No p-hacking problem**: Evidence can favor H₀, so stopping early doesn't artificially inflate false positives
+-   **Coherent framework**: Combines with prior knowledge naturally
+-   **Model comparison**: Can compare any models, not just nested ones
+-   **Handles optional stopping**: Valid inference regardless of when you stop collecting data
+
+## 7.5 Challenges for the Bayesian Approach (p.110)
+
+-   **Prior sensitivity**: BF depends on prior choice (especially prior width)
+    -   Wide priors penalize H₁ more → favor H₀
+-   **Computational difficulty**: Marginal likelihood hard to estimate
+-   **Prior specification**: Need to choose priors carefully and justify them
+-   **Communication**: Less familiar to many researchers than p-values
+
+## Savage-Dickey Density Ratio (Computational Method)
+
+-   Clever trick to compute BF when H₀ is a "sharp" point (e.g., δ = 0)
+-   **Formula**: $BF_{01} = \frac{p(\delta = 0 \mid D)}{p(\delta = 0)}$
+-   In words: posterior height at null ÷ prior height at null
+-   **Intuition**:
+    -   If posterior concentrates near δ=0 → high BF₀₁ → supports null
+    -   If posterior moves away from δ=0 → low BF₀₁ → supports alternative
+-   Requires sampling from both prior and posterior, then fitting densities
+
+## Order-Restricted Hypotheses
+
+-   Sometimes we have directional predictions: "Group A is *better* than B" (not just different)
+-   H₁: δ ≠ 0 (two-sided)
+-   H₂: δ \> 0 or δ \< 0 (one-sided, order-restricted)
+-   Truncate prior and posterior to the restricted region
+-   Often gives stronger evidence when prediction is correct
+
+------------------------------------------------------------------------
