@@ -93,5 +93,3 @@ From page 117: "From the current chapter, it is important that you understand th
 -   H₂: δ \> 0 or δ \< 0 (one-sided, order-restricted)
 -   Truncate prior and posterior to the restricted region
 -   Often gives stronger evidence when prediction is correct
-
-------------------------------------------------------------------------
