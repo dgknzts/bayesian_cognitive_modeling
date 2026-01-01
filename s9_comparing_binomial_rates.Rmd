@@ -140,7 +140,7 @@ ggplot(data.frame(x = c(-1, 1)), aes(x = x)) +
 
 ------------------------------------------------------------------------
 
-# 9.3 Comparing Within-Subject Proportions 
+# 9.3 Comparing Within-Subject Proportions
 
 **Question:** Does studying "both" items improve recall compared to studying "neither"? (Within-subjects design)
 
