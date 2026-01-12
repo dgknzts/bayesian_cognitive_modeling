@@ -77,7 +77,6 @@ xmean <- c(318.888, 311.0417, 284.4444, 301.5909,
 ### Plot Raw Data
 
 ```{r plot-raw-data, fig.width=10, fig.height=5}
-# Convert to long format for plotting
 df_list <- list()
 for (i in 1:nsubjs) {
   df_list[[i]] <- data.frame(
@@ -240,6 +239,115 @@ set.seed(123)
 
 ```
 
-# 12.2 Psychophysical functions under contamination
+# 12.2 Psychophysical Functions with Contaminants
 
-![](images/clipboard-3089617148.png)
+![](images/clipboard-2641404947.png)
+
+Sometimes subjects guess randomly (lapse of attention, button error). The **contaminant model** adds:
+
+-   z[i,j] \~ Bernoulli(phi): is trial a contaminant?
+-   If z=0: response follows psychometric function
+-   If z=1: response is random (Beta(1,1) = uniform)
+
+### Model
+
+```{r model-12-2}
+model_contaminant <- "
+  model {
+    for (i in 1:nsubjs) {
+      # Subject-level parameters
+      alpha[i] ~ dnorm(mua, lambdaa)   # Intercept for subject i
+      beta[i] ~ dnorm(mub, lambdab)   # Slope for subject i
+      probitphi[i] ~ dnorm(muphi, lambdaphi)  # Contamination rate (probit scale)
+      phi[i] <- phi(probitphi[i])    # Transform to probability (0-1)
+
+      for (j in 1:nstim[i]) {
+        # Contamination mechanism
+        z[i,j] ~ dbern(phi[i])  # Is this trial contaminated? (0=no, 1=yes)
+        z1[i,j] <- z[i,j] + 1   # Convert to index (1=psychometric, 2=random)
+
+        # Two response probabilities
+        logit(thetalim[i,j,1]) <- alpha[i] + beta[i] * (x[i,j] - xmean[i])  # Psychometric
+        pi[i,j] ~ dbeta(1,1)   # Random probability (uniform 0-1)
+        thetalim[i,j,2] <- pi[i,j]   # Store in slot 2
+
+        # Likelihood - pick based on z1
+        r[i,j] ~ dbin(thetalim[i,j, z1[i,j]], n[i,j]) # Select slot 1 or 2
+      }
+    }
+
+    # Hyperpriors for alpha/beta
+    mua ~ dnorm(0, 0.001)
+    mub ~ dnorm(0, 0.001)
+    sigmaa ~ dunif(0, 1000)
+    sigmab ~ dunif(0, 1000)
+    lambdaa <- pow(sigmaa, -2)
+    lambdab <- pow(sigmab, -2)
+
+    # Hyperpriors for contamination rate
+    muphi ~ dnorm(0, 1) # Tighter prior than alpha/beta
+    sigmaphi ~ dunif(0, 3)
+    lambdaphi <- pow(sigmaphi, -2)
+  }
+  "
+```
+
+```{r}
+set.seed(10)
+inits_contam <- list(
+  mua = 0, mub = 0, sigmaa = 1, sigmab = 1,
+  mup = 0, sigmap = 1,
+  alpha = runif(nsubjs, -2, 2),
+  beta = runif(nsubjs, 0, 0.5)
+)
+
+model2 <- jags.model(
+  textConnection(model_contaminant),
+  data = list(x = x, n = n, r = r, nsubjs = nsubjs, nstim = nstim, xmean = xmean),
+  inits = inits_contam,
+  n.chains = 1
+)
+
+update(model2, 1000)
+
+samples2 <- coda.samples(
+  model2,
+  variable.names = c("alpha", "beta", "z"),
+  n.iter = 5000
+)
+```
+
+### Compare JND Distributions
+
+```{r compare-jnd, fig.width=10, fig.height=5}
+posterior2 <- as.matrix(samples2)
+
+# JND from contaminant model
+jnd_posterior2 <- matrix(NA, nrow = nrow(posterior2), ncol = nsubjs)
+for (i in 1:nsubjs) {
+  alpha_i <- posterior2[, paste0("alpha[", i, "]")]
+  beta_i <- posterior2[, paste0("beta[", i, "]")]
+  jnd_posterior2[, i] <- log(0.84 / 0.16) / beta_i
+}
+
+df_jnd_compare <- bind_rows(
+  data.frame(jnd_posterior) %>%
+    setNames(1:8) %>%
+    pivot_longer(everything(), names_to = "subject", values_to = "jnd") %>%
+    mutate(model = "Basic"),
+  data.frame(jnd_posterior2) %>%
+    setNames(1:8) %>%
+    pivot_longer(everything(), names_to = "subject", values_to = "jnd") %>%
+    mutate(model = "Contaminant")
+)
+
+ggplot(df_jnd_compare, aes(x = jnd, fill = model)) +
+  geom_density(alpha = 0.5) +
+  facet_wrap(~subject, nrow = 2, scales = "free_y") +
+  coord_cartesian(xlim = c(0, 150)) +
+  scale_fill_manual(values = c("Basic" = "grey50", "Contaminant" = "steelblue")) +
+  labs(x = "JND (ms)", y = "Density") +
+  theme_minimal()
+```
+
+"The changes are most pronounced for subject 4, the subject with a single clear outlier. For subject 4, inclusion of the contaminant process resulted in a different psychometric function, one that is further away from the outlier. A comparison of Figure 12.4 with Figure 12.2 reveals that, for subject 4, inclusion of the contaminant process decreased the JND (the distance between the two vertical dotted lines). Inclusion of the contaminant process did not affect the PSE; at the 50% point, the old and the new psychometric functions are almost identical, even for subject 4." (p.174)
